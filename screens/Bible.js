@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   FlatList,
   Modal,
@@ -16,8 +15,18 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import bibleDB from '../src/services/bibleDB';
+
+const BIBLE_HIGHLIGHTS_KEY = 'bible_highlights_v1';
+const HIGHLIGHT_COLORS = [
+  { label: 'Yellow', value: '#FFF59D' },
+  { label: 'Green', value: '#C8F7D6' },
+  { label: 'Blue', value: '#CFE8FF' },
+  { label: 'Pink', value: '#F7D5F4' },
+  { label: 'Orange', value: '#FFE0C2' },
+];
 
 // ─── Verse Picker Modal ───────────────────────────────────────────────────────
 function VersePicker({ visible, onClose, onConfirm, books }) {
@@ -193,6 +202,21 @@ function VersePicker({ visible, onClose, onConfirm, books }) {
   );
 }
 
+// ─── Friendly error classifier ────────────────────────────────────────────────
+function getFriendlyBibleError(err) {
+  const msg = (err?.message || String(err || '')).toLowerCase();
+  if (
+    msg.includes('network request failed') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('timeout') ||
+    msg.includes('econnrefused')
+  ) {
+    return "No internet connection. Please check your Wi-Fi or mobile data and try again.";
+  }
+  return "We could not load this right now. Please go back and try again.";
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function Bible({ onExplainVerse }) {
   const [books, setBooks] = useState([]);
@@ -207,6 +231,8 @@ export default function Bible({ onExplainVerse }) {
   const [pickerVisible, setPickerVisible] = useState(false);
   const [verseActionVisible, setVerseActionVisible] = useState(false);
   const [selectedVerseAction, setSelectedVerseAction] = useState(null);
+  const [highlightMap, setHighlightMap] = useState({});
+  const [showHighlightPicker, setShowHighlightPicker] = useState(false);
   const [verseActionMessage, setVerseActionMessage] = useState('');
   const [testament, setTestament] = useState('OT');
 
@@ -230,13 +256,28 @@ export default function Bible({ onExplainVerse }) {
         setBooks(await bibleDB.getBooks());
         const savedIds = await bibleDB.getFavoriteVerseIds();
         setFavoriteVerseIds(savedIds);
+
+        const storedHighlights = await AsyncStorage.getItem(BIBLE_HIGHLIGHTS_KEY);
+        if (storedHighlights) {
+          const parsedHighlights = JSON.parse(storedHighlights);
+          if (parsedHighlights && typeof parsedHighlights === 'object') {
+            setHighlightMap(parsedHighlights);
+          }
+        }
       } catch (err) {
-        setError('Failed to load the Bible database.');
+        console.error('Bible highlight restore error', err);
+        setError(getFriendlyBibleError(err));
       } finally {
         setLoading(false);
       }
     })();
   }, []);
+
+  useEffect(() => {
+    AsyncStorage.setItem(BIBLE_HIGHLIGHTS_KEY, JSON.stringify(highlightMap)).catch((err) => {
+      console.error('Bible highlight save error', err);
+    });
+  }, [highlightMap]);
 
   const handlePickerConfirm = async ({ book, chapter, verse }) => {
     setPickerVisible(false);
@@ -254,8 +295,8 @@ export default function Bible({ onExplainVerse }) {
     try {
       const chs = await bibleDB.getChapters(book.book_id);
       setChapters(chs);
-    } catch {
-      Alert.alert('Error', 'Failed to load chapters.');
+    } catch (err) {
+      setError(getFriendlyBibleError(err));
     } finally {
       setLoading(false);
     }
@@ -269,8 +310,8 @@ export default function Bible({ onExplainVerse }) {
     try {
       const v = await bibleDB.getChapter(book.book_id, chapter);
       setVerses(v);
-    } catch {
-      Alert.alert('Error', 'Failed to load verses.');
+    } catch (err) {
+      setError(getFriendlyBibleError(err));
     } finally {
       setLoading(false);
     }
@@ -311,6 +352,7 @@ export default function Bible({ onExplainVerse }) {
 
   const handleVerseLongPress = (verse) => {
     setSelectedVerseAction(verse);
+    setShowHighlightPicker(false);
     setVerseActionMessage('');
     setVerseActionVisible(true);
   };
@@ -318,6 +360,7 @@ export default function Bible({ onExplainVerse }) {
   const closeVerseActionSheet = () => {
     setVerseActionVisible(false);
     setSelectedVerseAction(null);
+    setShowHighlightPicker(false);
     setVerseActionMessage('');
   };
 
@@ -335,6 +378,48 @@ export default function Bible({ onExplainVerse }) {
   const handleVerseActionExplain = () => {
     if (!selectedVerseAction) return;
     handleExplainWithAI(selectedVerseAction);
+  };
+
+  const handleVerseActionHighlight = () => {
+    if (!selectedVerseAction) return;
+    setShowHighlightPicker(true);
+  };
+
+  const handleSelectHighlightColor = async (color) => {
+    if (!selectedVerseAction) return;
+
+    setHighlightMap((prev) => ({
+      ...prev,
+      [selectedVerseAction.id]: {
+        id: selectedVerseAction.id,
+        book_id: selectedVerseAction.book_id,
+        book_name: selectedVerseAction.book_name,
+        chapter: selectedVerseAction.chapter,
+        verse: selectedVerseAction.verse,
+        text: selectedVerseAction.text,
+        color,
+      },
+    }));
+
+    setShowHighlightPicker(false);
+    setVerseActionVisible(false);
+    setSelectedVerseAction(null);
+    setVerseActionMessage('Verse highlighted.');
+  };
+
+  const handleRemoveHighlight = async () => {
+    if (!selectedVerseAction) return;
+
+    setHighlightMap((prev) => {
+      const next = { ...prev };
+      delete next[selectedVerseAction.id];
+      return next;
+    });
+
+    setShowHighlightPicker(false);
+    setVerseActionVisible(false);
+    setSelectedVerseAction(null);
+    setVerseActionMessage('Highlight removed.');
   };
 
   const goBack = () => {
@@ -425,9 +510,14 @@ export default function Bible({ onExplainVerse }) {
           keyExtractor={(v) => String(v.id)}
           renderItem={({ item }) => {
             const active = highlightedId === item.id;
+            const highlight = highlightMap[item.id];
             return (
               <TouchableOpacity
-                style={[styles.verseRow, active && styles.verseRowActive]}
+                style={[
+                  styles.verseRow,
+                  active && styles.verseRowActive,
+                  highlight ? { backgroundColor: highlight.color } : null,
+                ]}
                 onPress={() => setHighlightedId(active ? null : item.id)}
                 onLongPress={() => handleVerseLongPress(item)}
                 activeOpacity={0.8}
@@ -541,6 +631,42 @@ export default function Bible({ onExplainVerse }) {
                 {favoriteVerseIds.includes(selectedVerseAction?.id) ? 'Remove from favorites' : 'Add to favorites'}
               </Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.actionSheetButton}
+              onPress={handleVerseActionHighlight}
+              activeOpacity={0.85}
+            >
+              <View style={styles.actionSheetButtonIconWrap}>
+                <Ionicons name="color-palette-outline" size={18} color="#534AB7" />
+              </View>
+              <Text style={styles.actionSheetButtonText}>
+                {highlightMap[selectedVerseAction?.id] ? 'Change highlight' : 'Highlight'}
+              </Text>
+            </TouchableOpacity>
+
+            {showHighlightPicker && selectedVerseAction && (
+              <View style={styles.highlightPickerWrap}>
+                <Text style={styles.highlightPickerLabel}>Choose a colour</Text>
+                <View style={styles.highlightColorRow}>
+                  {HIGHLIGHT_COLORS.map((colorOption) => (
+                    <TouchableOpacity
+                      key={colorOption.value}
+                      style={[styles.colorChip, { backgroundColor: colorOption.value }]}
+                      onPress={() => handleSelectHighlightColor(colorOption.value)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.colorChipLabel}>{colorOption.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                {highlightMap[selectedVerseAction.id] && (
+                  <TouchableOpacity style={styles.removeHighlightBtn} onPress={handleRemoveHighlight} activeOpacity={0.85}>
+                    <Text style={styles.removeHighlightBtnText}>Remove highlight</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
 
             <TouchableOpacity
               style={styles.actionSheetButton}
@@ -863,6 +989,53 @@ const styles = StyleSheet.create({
   },
   actionSheetButtonPrimaryText: {
     color: '#FFFFFF',
+  },
+  highlightPickerWrap: {
+    marginTop: 4,
+    marginBottom: 10,
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 0.5,
+    borderColor: '#E4E3EF',
+    backgroundColor: '#FAF9FF',
+  },
+  highlightPickerLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#534AB7',
+    marginBottom: 8,
+  },
+  highlightColorRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  colorChip: {
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 0.5,
+    borderColor: '#E4E3EF',
+    minWidth: 88,
+    alignItems: 'center',
+  },
+  colorChipLabel: {
+    fontSize: 11,
+    color: '#1B153F',
+    fontWeight: '600',
+  },
+  removeHighlightBtn: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    backgroundColor: '#FFF1F3',
+  },
+  removeHighlightBtnText: {
+    fontSize: 12,
+    color: '#C34A6F',
+    fontWeight: '700',
   },
 
   // ── Picker Modal ──

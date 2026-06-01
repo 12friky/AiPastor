@@ -8,23 +8,65 @@ import {
   StyleSheet,
   Platform,
   StatusBar,
-  Animated,
   Alert,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import bibleDB from '../src/services/bibleDB';
 import { Ionicons } from '@expo/vector-icons';
 
+// ─── Friendly toast-style banner for save/copy errors ─────────────────────────
+function StatusBanner({ type, message, onDismiss }) {
+  if (!message) return null;
+  const isError = type === 'error';
+  return (
+    <TouchableOpacity
+      style={[resultErrorStyles.banner, isError ? resultErrorStyles.bannerError : resultErrorStyles.bannerSuccess]}
+      onPress={onDismiss}
+      activeOpacity={0.9}
+    >
+      <Text style={resultErrorStyles.bannerIcon}>{isError ? '⚠️' : '✅'}</Text>
+      <Text style={[resultErrorStyles.bannerText, isError ? resultErrorStyles.bannerTextError : resultErrorStyles.bannerTextSuccess]}>
+        {message}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+const resultErrorStyles = StyleSheet.create({
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+  },
+  bannerError: { backgroundColor: '#FFF4F4', borderColor: '#FECDCD' },
+  bannerSuccess: { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' },
+  bannerIcon: { fontSize: 16 },
+  bannerText: { flex: 1, fontSize: 13, fontWeight: '600' },
+  bannerTextError: { color: '#B91C1C' },
+  bannerTextSuccess: { color: '#166534' },
+});
+
 const SECTIONS_META = {
+  'sermon title': { icon: '✝️', color: '#1B153F', bg: '#EDE7F6', border: '#B39DDB' },
+  'focus': { icon: '🎯', color: '#1B153F', bg: '#F3F0FF', border: '#C5B8F8' },
   'opening scripture': { icon: '📖', color: '#1B4332', bg: '#D8F3DC', border: '#B7E4C7' },
   'introduction': { icon: '🔥', color: '#7B2D00', bg: '#FFF3E0', border: '#FFCC80' },
   'point 1': { icon: '①', color: '#1A237E', bg: '#E8EAF6', border: '#C5CAE9' },
   'point 2': { icon: '②', color: '#1A237E', bg: '#E8EAF6', border: '#C5CAE9' },
   'point 3': { icon: '③', color: '#1A237E', bg: '#E8EAF6', border: '#C5CAE9' },
+  'point 4': { icon: '④', color: '#1A237E', bg: '#E8EAF6', border: '#C5CAE9' },
   'illustration': { icon: '💡', color: '#4A148C', bg: '#F3E5F5', border: '#CE93D8' },
   'climax': { icon: '⚡', color: '#B71C1C', bg: '#FFEBEE', border: '#EF9A9A' },
   'altar call': { icon: '🙏', color: '#004D40', bg: '#E0F2F1', border: '#80CBC4' },
   'closing verse': { icon: '✝️', color: '#1B153F', bg: '#EDE7F6', border: '#B39DDB' },
+  'prayer points': { icon: '🙌', color: '#6D4C41', bg: '#FFF3E0', border: '#FFCC80' },
+  'preaching tips': { icon: '🎙️', color: '#1A237E', bg: '#E3F2FD', border: '#90CAF9' },
   "preacher's tip": { icon: '🎙️', color: '#1A237E', bg: '#E3F2FD', border: '#90CAF9' },
 };
 
@@ -68,6 +110,111 @@ function normalizeTextValue(value) {
   }
 
   return String(value).trim();
+}
+
+// Known section titles used to split plain-text fallback
+const KNOWN_SECTIONS = [
+  'SERMON TITLE',
+  'FOCUS / THEME',
+  'OPENING SCRIPTURE',
+  'INTRODUCTION',
+  'Point 1',
+  'Point 2',
+  'Point 3',
+  'Point 4',
+  'ILLUSTRATION',
+  'CLIMAX',
+  'ALTAR CALL / APPLICATION',
+  'CLOSING VERSE',
+  'PRAYER POINTS',
+  'PREACHING TIPS',
+];
+
+/**
+ * Takes whatever the backend/AI returns and always produces
+ * a clean array of { section, text } objects for rendering.
+ * Handles:
+ *  - Already-parsed array of objects
+ *  - JSON string (with or without ```json fences)
+ *  - Raw text with labelled sections
+ *  - Completely unstructured text (single fallback card)
+ */
+function parseSermonSections(raw) {
+  // 1. Already a proper array
+  if (Array.isArray(raw)) {
+    const mapped = raw
+      .map((item, i) => ({
+        section: normalizeTextValue(item?.section) || `Section ${i + 1}`,
+        text: normalizeTextValue(item?.text) || '',
+        tags: normalizeTextValue(item?.tags) || '',
+      }))
+      .filter((item) => item.section && item.text);
+    if (mapped.length > 0) return mapped;
+  }
+
+  // 2. String — try to extract and parse JSON
+  if (typeof raw === 'string') {
+    // Strip markdown fences
+    const stripped = raw
+      .replace(/^```json\s*/im, '')
+      .replace(/^```\s*/im, '')
+      .replace(/\s*```$/im, '')
+      .trim();
+
+    // Try direct JSON parse
+    const tryJson = (text) => {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          const mapped = parsed
+            .map((item, i) => ({
+              section: normalizeTextValue(item?.section) || `Section ${i + 1}`,
+              text: normalizeTextValue(item?.text) || '',
+              tags: normalizeTextValue(item?.tags) || '',
+            }))
+            .filter((item) => item.section && item.text);
+          if (mapped.length > 0) return mapped;
+        }
+      } catch (_) { /* not valid JSON */ }
+      return null;
+    };
+
+    let result = tryJson(stripped);
+    if (result) return result;
+
+    // Try to find a JSON array anywhere in the string
+    const jsonMatch = stripped.match(/(\[\s*\{[\s\S]*?\}\s*\])/m);
+    if (jsonMatch) {
+      result = tryJson(jsonMatch[1]);
+      if (result) return result;
+    }
+
+    // 3. Plain-text fallback: split by known section headings
+    const escapedTitles = KNOWN_SECTIONS.map((s) =>
+      s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    );
+    const pattern = new RegExp(
+      `(${escapedTitles.join('|')})\\s*[:\\-]?\\s*`,
+      'gi'
+    );
+    const parts = stripped.split(pattern).map((p) => p.trim()).filter(Boolean);
+
+    const sections = [];
+    for (let i = 0; i < parts.length - 1; i += 2) {
+      const sectionTitle = parts[i].replace(/^\*+|\*+$/g, '').trim();
+      const sectionText = parts[i + 1] || '';
+      if (sectionTitle && sectionText) {
+        sections.push({ section: sectionTitle, text: sectionText, tags: '' });
+      }
+    }
+    if (sections.length > 0) return sections;
+
+    // 4. Last resort — show the whole text in one card
+    return [{ section: 'SERMON', text: stripped, tags: '' }];
+  }
+
+  // 5. Unexpected type — convert to string and wrap
+  return [{ section: 'SERMON', text: String(raw ?? ''), tags: '' }];
 }
 
 function SectionCard({ item, index }) {
@@ -126,12 +273,16 @@ function SectionCard({ item, index }) {
 
 export default function SermonResult({ topic, sections, onBack }) {
   const [isSaving, setIsSaving] = useState(false);
-  const normalizedSections = (sections || []).map((item, index) => ({
-    section: normalizeTextValue(item?.section) || `Section ${index + 1}`,
-    text: normalizeTextValue(item?.text) || '',
-    tags: normalizeTextValue(item?.tags) || '',
-  }));
-  const sermonSections = normalizedSections.length > 0 ? normalizedSections : [
+  const [statusBanner, setStatusBanner] = useState(null); // { type: 'success'|'error', message }
+
+  const showBanner = (type, message) => {
+    setStatusBanner({ type, message });
+    setTimeout(() => setStatusBanner(null), 3500);
+  };
+
+  // Always parse/normalize whatever comes in — handles arrays, JSON strings, raw text
+  const parsedSections = parseSermonSections(sections);
+  const sermonSections = parsedSections.length > 0 ? parsedSections : [
     {
       section: 'Opening Scripture',
       text: 'John 14:16–17 — "And I will ask the Father, and he will give you another advocate to help you and be with you forever — the Spirit of truth."',
@@ -190,19 +341,23 @@ export default function SermonResult({ topic, sections, onBack }) {
     setIsSaving(true);
     try {
       await bibleDB.saveSermon(displayTopic, sermonSections);
-      Alert.alert('Saved', 'Sermon saved successfully.');
+      showBanner('success', 'Sermon saved successfully.');
     } catch (err) {
       console.error('Save sermon error', err);
-      Alert.alert('Save Error', 'Unable to save sermon.');
+      showBanner('error', 'We could not save your sermon. Please try again.');
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleCopySermon = async () => {
-    const text = sermonSections.map((item) => `${item.section}\n${item.text}`).join('\n\n');
-    await Clipboard.setStringAsync(text);
-    Alert.alert('Copied', 'Sermon copied to clipboard.');
+    try {
+      const text = sermonSections.map((item) => `${item.section}\n${item.text}`).join('\n\n');
+      await Clipboard.setStringAsync(text);
+      showBanner('success', 'Sermon copied to clipboard.');
+    } catch (err) {
+      showBanner('error', 'Could not copy the sermon. Please try again.');
+    }
   };
 
   return (
@@ -243,6 +398,12 @@ export default function SermonResult({ topic, sections, onBack }) {
           <Text style={[styles.heroActionText, styles.heroActionSaveText]}>{isSaving ? 'Saving...' : 'Save sermon'}</Text>
         </TouchableOpacity>
       </View>
+
+      <StatusBanner
+        type={statusBanner?.type}
+        message={statusBanner?.message}
+        onDismiss={() => setStatusBanner(null)}
+      />
 
       <ScrollView
         style={styles.scroll}

@@ -2,8 +2,58 @@ import React, { useEffect, useState } from 'react';
 import { Alert, SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, StatusBar, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../apiService';
 import bibleDB from '../src/services/bibleDB';
+import { useTokens } from '../src/contexts/TokenContext';
+
+const TOOL_PROMPTS = {
+  prayer: (userPrompt) =>
+    `Write a heartfelt, pastoral prayer based on the following: "${userPrompt}". 
+Write it as flowing, readable plain text. 
+Do NOT use any markdown formatting — no asterisks, no bold, no bullet points, no hashtags, no symbols. 
+Just write the prayer as natural, spoken words a pastor would pray aloud.`,
+
+  social: (userPrompt) =>
+    `Write a church social media post based on the following: "${userPrompt}". 
+Write it as plain text ready to copy and paste. 
+Do NOT use any markdown formatting — no asterisks, no bold, no hashtags unless they are real social media hashtags, no symbols. 
+Keep it warm, engaging, and congregation-friendly.`,
+
+  announcement: (userPrompt) =>
+    `Write a church announcement based on the following: "${userPrompt}". 
+Write it as plain, readable text a pastor or announcer would read aloud. 
+Do NOT use any markdown formatting — no asterisks, no bold, no bullet symbols, no hashtags. 
+Use clear sentences and natural paragraph breaks only.`,
+
+  bulletin: (userPrompt) =>
+    `Write a church bulletin entry based on the following: "${userPrompt}". 
+Write it as clean, plain text suitable for printing in a church bulletin. 
+Do NOT use any markdown formatting — no asterisks, no bold, no symbols. 
+Use simple section labels followed by a colon if needed, and plain paragraph text.`,
+};
+
+/**
+ * Strips markdown formatting characters from AI-generated text.
+ * Removes bold (**text**), italic (*text*), headers (###), and other markdown symbols.
+ */
+function stripMarkdown(text) {
+  if (!text) return '';
+  return text
+    .replace(/\*\*\*(.+?)\*\*\*/g, '$1')   // bold+italic ***text***
+    .replace(/\*\*(.+?)\*\*/g, '$1')         // bold **text**
+    .replace(/\*(.+?)\*/g, '$1')             // italic *text*
+    .replace(/_{2}(.+?)_{2}/g, '$1')         // bold __text__
+    .replace(/_(.+?)_/g, '$1')               // italic _text_
+    .replace(/^#{1,6}\s+/gm, '')             // headers ### Title
+    .replace(/^[-*+]\s+/gm, '• ')           // unordered list items → bullet
+    .replace(/^\d+\.\s+/gm, '')             // ordered list items
+    .replace(/`{3}[\s\S]*?`{3}/g, '')       // code blocks
+    .replace(/`(.+?)`/g, '$1')              // inline code
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1')     // links [text](url)
+    .replace(/\n{3,}/g, '\n\n')             // collapse excess blank lines
+    .trim();
+}
 
 const TOOL_OPTIONS = [
   { key: 'prayer', label: 'Prayer gen', icon: 'heart-outline' },
@@ -12,13 +62,14 @@ const TOOL_OPTIONS = [
   { key: 'bulletin', label: 'Bulletin writer', icon: 'document-text-outline' },
 ];
 
-export default function ToolHub({ selectedTool, onBack }) {
+export default function ToolHub({ selectedTool, onBack, onTokensExpired }) {
   const defaultTool = TOOL_OPTIONS[0].key;
   const [prompt, setPrompt] = useState('');
   const [activeTool, setActiveTool] = useState(selectedTool || defaultTool);
   const [generatedText, setGeneratedText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const { isExpired, refreshTokenStatus } = useTokens();
 
   useEffect(() => {
     setActiveTool(selectedTool || defaultTool);
@@ -28,26 +79,48 @@ export default function ToolHub({ selectedTool, onBack }) {
   const activeToolLabel = activeToolItem.label;
 
   const handleGenerate = async () => {
+    // ── Token guard ──────────────────────────────────────────────────────
+    if (isExpired) {
+      if (onTokensExpired) onTokensExpired();
+      return;
+    }
+
     if (!activeTool || !prompt.trim()) return;
 
     setIsGenerating(true);
     setGeneratedText('');
 
-    const toolPrompt = `Generate a ${activeToolLabel.toLowerCase()} using the following user prompt: ${prompt}`;
+    const buildPrompt = TOOL_PROMPTS[activeTool];
+    const toolPrompt = buildPrompt
+      ? buildPrompt(prompt.trim())
+      : `Generate a ${activeToolLabel.toLowerCase()} using the following: ${prompt.trim()}. Write in plain text only, no markdown formatting.`;
 
     try {
+      const storedToken = await AsyncStorage.getItem('token');
       const response = await fetch(`${API_BASE_URL}/api/gemin/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: toolPrompt }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(storedToken ? { Authorization: `Bearer ${storedToken}` } : {}),
+        },
+        body: JSON.stringify({ message: toolPrompt, feature: 'CHAT_AI_PASTOR' }),
       });
 
       const data = await response.json();
+
+      // Handle token exhaustion
+      if (data.error === 'OUT_OF_TOKENS') {
+        if (onTokensExpired) onTokensExpired();
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(data.error || 'Backend generation failed');
       }
 
-      setGeneratedText(data.response || 'No response from backend');
+      const cleaned = stripMarkdown(data.response || '');
+      setGeneratedText(cleaned || 'No response from backend');
+      refreshTokenStatus();
     } catch (error) {
       Alert.alert('Generation Error', error.message || 'Unable to generate content');
       setGeneratedText('');

@@ -1,10 +1,88 @@
-import React, { useState } from 'react';
-import { SafeAreaView, ScrollView, View, Text, TouchableOpacity, TextInput, StyleSheet, Platform, StatusBar, ActivityIndicator, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { SafeAreaView, ScrollView, View, Text, TouchableOpacity, TextInput, StyleSheet, Platform, StatusBar, ActivityIndicator } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../apiService';
 import { Ionicons } from '@expo/vector-icons';
 import SermonResult from './SermonResult';
+import { useTokens } from '../src/contexts/TokenContext';
 
-export default function Sermon() {
+// ─── Friendly error classifier ────────────────────────────────────────────────
+function getFriendlyError(err) {
+  const msg = (err?.message || String(err || '')).toLowerCase();
+  if (
+    msg.includes('network request failed') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('timeout') ||
+    msg.includes('econnrefused') ||
+    msg.includes('no internet')
+  ) {
+    return {
+      icon: '📶',
+      title: 'No internet connection',
+      body: "It looks like you're offline. Please check your Wi-Fi or mobile data and try again.",
+    };
+  }
+  if (
+    msg.includes('gemini') ||
+    msg.includes('api key') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit') ||
+    msg.includes('503') ||
+    msg.includes('500')
+  ) {
+    return {
+      icon: '🤖',
+      title: 'AI is taking a break',
+      body: 'Our AI assistant is temporarily unavailable. Please wait a moment and try again.',
+    };
+  }
+  return {
+    icon: '⚠️',
+    title: 'Something went wrong',
+    body: 'We could not build your sermon right now. Please try again.',
+  };
+}
+
+function ErrorCard({ err, onRetry }) {
+  const info = getFriendlyError(err);
+  return (
+    <View style={errorStyles.card}>
+      <Text style={errorStyles.icon}>{info.icon}</Text>
+      <Text style={errorStyles.title}>{info.title}</Text>
+      <Text style={errorStyles.body}>{info.body}</Text>
+      {onRetry && (
+        <TouchableOpacity style={errorStyles.btn} onPress={onRetry} activeOpacity={0.8}>
+          <Text style={errorStyles.btnText}>Try again</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
+const errorStyles = StyleSheet.create({
+  card: {
+    backgroundColor: '#FFF4F4',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#FECDCD',
+    padding: 20,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  icon: { fontSize: 36, marginBottom: 10 },
+  title: { fontSize: 15, fontWeight: '700', color: '#B91C1C', marginBottom: 6, textAlign: 'center' },
+  body: { fontSize: 13, color: '#7F1D1D', lineHeight: 19, textAlign: 'center', marginBottom: 14 },
+  btn: {
+    backgroundColor: '#B91C1C',
+    borderRadius: 14,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+  },
+  btnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+});
+
+export default function Sermon({ onTokensExpired }) {
   const [topic, setTopic] = useState('Love and peace');
   const [selectedAudience, setSelectedAudience] = useState('Congregation');
   const [selectedLength, setSelectedLength] = useState('5-8 minutes');
@@ -12,6 +90,22 @@ export default function Sermon() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedSermon, setGeneratedSermon] = useState(null);
   const [showResult, setShowResult] = useState(false);
+  const [cachedSermon, setCachedSermon] = useState(null);
+  const [generateError, setGenerateError] = useState(null);
+  const { isExpired, refreshTokenStatus } = useTokens();
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const stored = await AsyncStorage.getItem('cached_sermon');
+        if (stored) {
+          setCachedSermon(JSON.parse(stored));
+        }
+      } catch (error) {
+        console.warn('Load cached sermon failed', error);
+      }
+    })();
+  }, []);
 
   const audiences = ['Congregation', 'Youth group', 'Parents', 'Leaders'];
   const lengths = ['5-8 minutes', '10-12 minutes', '15-20 minutes'];
@@ -19,18 +113,67 @@ export default function Sermon() {
 
   const expectedSections = [
     'SERMON TITLE',
-    'FOCUS',
-    'OPENING SCRIPTURE (TEXT)',
-    'INTRODUCTION (HOOK)',
+    'FOCUS / THEME',
+    'OPENING SCRIPTURE',
+    'INTRODUCTION',
     'Point 1',
     'Point 2',
     'Point 3',
+    'Point 4',
     'ILLUSTRATION',
-    'CLIMAX (THE EXPLOSION MOMENT)',
+    'CLIMAX',
     'ALTAR CALL / APPLICATION',
     'CLOSING VERSE',
-    'PREACHER\'S TIP',
+    'PRAYER POINTS',
+    'PREACHING TIPS',
   ];
+
+  const normalizeSermonText = (value) => {
+    if (typeof value === 'string') {
+      return value
+        .replace(/\r\n/g, '\n')
+        .replace(/[\t\u00a0]+/g, ' ')
+        .replace(/\s*\n\s*/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => normalizeSermonText(entry))
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    if (value && typeof value === 'object') {
+      const lines = [];
+      for (const [key, entryValue] of Object.entries(value)) {
+        const normalized = normalizeSermonText(entryValue);
+        if (!normalized) continue;
+
+        if (typeof entryValue === 'string' || typeof entryValue === 'number' || typeof entryValue === 'boolean') {
+          lines.push(normalized);
+        } else {
+          lines.push(`${key}: ${normalized}`);
+        }
+      }
+      return lines.join('\n');
+    }
+
+    return String(value ?? '')
+      .replace(/\r\n/g, '\n')
+      .replace(/[\t\u00a0]+/g, ' ')
+      .replace(/\s*\n\s*/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  const normalizeSectionTitle = (value) => normalizeSermonText(value)
+    .replace(/\s+/g, ' ')
+    .replace(/^\*+|\*+$/g, '')
+    .trim();
 
   const parseSermonResponse = (responseText) => {
     const cleaned = responseText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
@@ -38,8 +181,11 @@ export default function Sermon() {
     const tryParseJson = (text) => {
       try {
         const parsed = JSON.parse(text);
-        if (Array.isArray(parsed) && parsed.every((item) => item.section && item.text)) {
-          return parsed;
+        if (Array.isArray(parsed) && parsed.every((item) => item.section || item.text)) {
+          return parsed.map((item) => ({
+            section: normalizeSectionTitle(normalizeSermonText(item.section || 'SECTION')),
+            text: normalizeSermonText(item.text || ''),
+          }));
         }
       } catch (e) {
         return null;
@@ -67,10 +213,10 @@ export default function Sermon() {
 
     const parts = cleaned.split(pattern).map((part) => part.trim()).filter((part) => part !== '');
     for (let i = 0; i < parts.length; i += 2) {
-      const section = parts[i];
-      const text = parts[i + 1] || '';
+      const section = normalizeSectionTitle(parts[i]);
+      const text = normalizeSermonText(parts[i + 1] || '');
       if (section && text) {
-        sections.push({ section, text: text.trim() });
+        sections.push({ section, text });
       }
     }
 
@@ -86,122 +232,88 @@ export default function Sermon() {
     ];
   };
 
+  const storeCachedSermon = async (sermonData) => {
+    try {
+      const payload = {
+        topic,
+        selectedAudience,
+        selectedLength,
+        selectedTone,
+        sermon: sermonData,
+        cachedAt: new Date().toISOString(),
+      };
+      await AsyncStorage.setItem('cached_sermon', JSON.stringify(payload));
+      setCachedSermon(payload);
+    } catch (error) {
+      console.warn('Cache sermon failed', error);
+    }
+  };
+
   const handleGenerate = async () => {
+    // ── Token guard ──────────────────────────────────────────────────────
+    if (isExpired) {
+      if (onTokensExpired) onTokensExpired();
+      return;
+    }
+
     if (!topic.trim()) {
-      Alert.alert('Validation', 'Please enter a sermon topic.');
+      setGenerateError({ message: 'Please enter a sermon topic before building.' });
       return;
     }
 
     setIsGenerating(true);
     setGeneratedSermon(null);
     setShowResult(false);
+    setGenerateError(null);
 
-    const prompt = `Prepare a full structured sermon on the topic "${topic}" for a ${selectedAudience}. Tone: ${selectedTone}. Length: ${selectedLength}. Use a warm, bold, African Pentecostal preaching voice. Do not make it sound like an essay.
+    const prompt = `You are a sermon writing assistant. Generate a complete sermon as a JSON array. Do not write anything outside the JSON array. No markdown. No explanation. No code fences. Just the raw JSON array.
 
-When I give you a sermon topic, present it in EXACTLY this format and only this format. Do not add any extra sections or text outside the JSON array.
+Topic: "${topic}"
+Audience: ${selectedAudience}
+Tone: ${selectedTone}
+Length: ${selectedLength}
+Voice: Warm, bold, African Pentecostal preaching style. Passionate, scripture-backed, congregation-focused.
 
-SERMON TITLE: [Topic as a powerful title]
+Return ONLY a valid JSON array with exactly these 14 objects in this exact order. Each object has a "section" key and a "text" key:
 
-FOCUS: [What the congregation should understand or feel]
+[
+  { "section": "SERMON TITLE", "text": "..." },
+  { "section": "FOCUS / THEME", "text": "..." },
+  { "section": "OPENING SCRIPTURE", "text": "Full Bible verse with reference and translation" },
+  { "section": "INTRODUCTION", "text": "Engaging Spirit-filled opening. Use phrases like Hallelujah, Can I get an Amen" },
+  { "section": "Point 1", "text": "First main point with scripture references" },
+  { "section": "Point 2", "text": "Second main point with scripture references" },
+  { "section": "Point 3", "text": "Third main point with scripture references" },
+  { "section": "Point 4", "text": "Fourth main point with scripture references" },
+  { "section": "ILLUSTRATION", "text": "A powerful real-life story or example" },
+  { "section": "CLIMAX", "text": "The explosive high point of the sermon. Bold and fire-filled." },
+  { "section": "ALTAR CALL / APPLICATION", "text": "Call to action and prayer of salvation" },
+  { "section": "CLOSING VERSE", "text": "A closing scripture with full quote and reference" },
+  { "section": "PRAYER POINTS", "text": "At least 4 specific pastoral prayer points tied to the sermon theme" },
+  { "section": "PREACHING TIPS", "text": "Practical delivery tips for the preacher" }
+]
 
----
-
-OPENING SCRIPTURE (TEXT)
-
-- Give the main anchor verse in full
-
-- Give 1 supporting verse
-
----
-
-INTRODUCTION (HOOK)
-
-- Label it: "Open strong"
-
-- Give it a short title
-
-- Write 3–5 sentences that open with a relatable human situation or story
-
-- End the introduction with a question or statement that transitions into the sermon
-
----
-
-MAIN BODY — 3 POINTS
-
-For each point:
-- Number it exactly as Point 1, Point 2, Point 3
-- Give it a clear, short title
-- Write 4–6 sentences explaining the point theologically and practically
-- Ground it in the congregation's real life
-- End each point with 2–3 key Bible verses in full
-
----
-
-ILLUSTRATION
-
-- Label it: "Story / Illustration"
-- Give it a title
-- Write a short vivid story or analogy (not from the Bible) that makes the sermon's main truth easy to picture and feel
-- It must connect emotionally, not just intellectually
-
----
-
-CLIMAX (THE EXPLOSION MOMENT)
-
-- This is the emotional and spiritual peak of the sermon
-- Write it in direct, second-person language
-- It should be bold, repetitive, and building in intensity
-- This is where the preacher shifts from explaining to declaring
-
----
-
-ALTAR CALL / APPLICATION
-
-- Give 3 specific invitations:
-  1. For the unsaved
-  2. For believers who need to return or recommit
-  3. For those who want a fresh encounter or deeper experience
-
----
-
-CLOSING VERSE
-
-- One powerful verse that seals the message
-
----
-
-PREACHER'S TIP
-
-- Give 1 practical tip for delivering this sermon in the pulpit
-
----
-
-RULES YOU MUST FOLLOW:
-1. Always include real Bible verses written out in full
-2. The 3 main points must build on each other — each one deeper than the last
-3. The illustration must be original, not a Bible story
-4. The climax must sound like it is spoken, not written — use repetition and rhythm
-5. The altar call must have 3 distinct invitations for different people in the room
-6. Write in a warm, bold, African Pentecostal preaching voice
-7. Never make it sound like an essay — it must sound like a sermon
-
-Return the output STRICTLY as a valid JSON array of objects. Only respond with the JSON array. Do not include any markdown or explanation.
-
-The JSON array must use these exact section titles in order: SERMON TITLE, FOCUS, OPENING SCRIPTURE (TEXT), INTRODUCTION (HOOK), Point 1, Point 2, Point 3, ILLUSTRATION, CLIMAX (THE EXPLOSION MOMENT), ALTAR CALL / APPLICATION, CLOSING VERSE, PREACHER'S TIP.
-
-Each object must have exactly these keys:
-- "section": the exact section title above
-- "text": the content for that section
+STRICT RULES:
+- Output ONLY the JSON array above. Nothing before it. Nothing after it.
+- Do NOT wrap in markdown code fences.
+- Do NOT add extra sections or keys.
+- Every "section" value must match exactly one of the 14 titles listed above.
+- Every "text" value must be a plain string (no nested objects or arrays).
 `;
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/gemin/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: prompt }),
+        body: JSON.stringify({ message: prompt, feature: 'GENERATE_SERMON' }),
       });
 
       const data = await response.json();
+
+      if (data.error === 'OUT_OF_TOKENS') {
+        if (onTokensExpired) onTokensExpired();
+        return;
+      }
       
       if (!response.ok) {
         throw new Error(data.error || 'Failed to generate sermon');
@@ -211,19 +323,35 @@ Each object must have exactly these keys:
       aiText = aiText.replace(/^```json/mi, '').replace(/```$/m, '').trim();
       const parsedSermon = parseSermonResponse(aiText);
       setGeneratedSermon(parsedSermon);
-
+      await storeCachedSermon(parsedSermon);
+      await refreshTokenStatus();
       setShowResult(true);
     } catch (error) {
-      Alert.alert('Generation Error', error.message);
+      setGenerateError(error);
     } finally {
       setIsGenerating(false);
     }
   };
 
+  const handleViewPrevious = () => {
+    if (!cachedSermon?.sermon) {
+      Alert.alert('No cached sermon', 'Generate a sermon first to save a previous version.');
+      return;
+    }
+    setGeneratedSermon(cachedSermon.sermon);
+    setShowResult(true);
+  };
+
+  const handleGenerateNew = async () => {
+    await AsyncStorage.removeItem('cached_sermon');
+    setCachedSermon(null);
+    await handleGenerate();
+  };
+
   if (showResult && generatedSermon) {
     return (
       <SermonResult
-        topic={topic}
+        topic={cachedSermon?.topic || topic}
         sections={generatedSermon}
         onBack={() => setShowResult(false)}
       />
@@ -321,6 +449,19 @@ Each object must have exactly these keys:
             <Text style={styles.buildButtonText}>Build my sermon</Text>
           )}
         </TouchableOpacity>
+
+        {generateError && (
+          <ErrorCard err={generateError} onRetry={handleGenerate} />
+        )}
+
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={styles.secondaryButton} onPress={handleGenerateNew} activeOpacity={0.85}>
+            <Text style={styles.secondaryButtonText}>Generate New Sermon</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryButton} onPress={handleViewPrevious} activeOpacity={0.85}>
+            <Text style={styles.secondaryButtonText}>View Previous Sermon</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -442,6 +583,25 @@ const styles = StyleSheet.create({
   buildButtonText: {
     color: '#FFFFFF',
     fontSize: 14,
+    fontWeight: '700',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 18,
+  },
+  secondaryButton: {
+    flex: 1,
+    minWidth: '46%',
+    backgroundColor: '#EEF0FF',
+    borderRadius: 18,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  secondaryButtonText: {
+    color: '#1B153F',
+    fontSize: 12,
     fontWeight: '700',
   },
   generatedHeader: {

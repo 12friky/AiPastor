@@ -3,24 +3,63 @@ import { SafeAreaView, ScrollView, View, Text, TouchableOpacity, StyleSheet, Pla
 import { Ionicons } from '@expo/vector-icons';
 import bibleDB from '../src/services/bibleDB';
 
+function stripMarkdown(text) {
+  if (!text) return '';
+  return text
+    .replace(/\*\*\*(.+?)\*\*\*/g, '$1')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/_{2}(.+?)_{2}/g, '$1')
+    .replace(/_(.+?)_/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^[-*+]\s+/gm, '• ')
+    .replace(/^\d+\.\s+/gm, '')
+    .replace(/`{3}[\s\S]*?`{3}/g, '')
+    .replace(/`(.+?)`/g, '$1')
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export default function SavedToolsScreen({ onBack }) {
   const [savedItems, setSavedItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const loadSavedItems = async () => {
+    try {
+      setLoading(true);
+      const rows = await bibleDB.getSavedToolItems();
+      setSavedItems(rows);
+    } catch (err) {
+      console.error('Load saved tool items', err);
+      Alert.alert('Error', 'Unable to load saved tool items.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        const rows = await bibleDB.getSavedToolItems();
-        setSavedItems(rows);
-      } catch (err) {
-        console.error('Load saved tool items', err);
-        Alert.alert('Error', 'Unable to load saved tool items.');
-      } finally {
-        setLoading(false);
-      }
-    })();
+    loadSavedItems();
   }, []);
+
+  const handleDelete = async (item) => {
+    Alert.alert('Delete this saved tool item?', 'This will remove it from your saved tools.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await bibleDB.removeSavedToolItem(item.id);
+            setSavedItems((prev) => prev.filter((entry) => entry.id !== item.id));
+          } catch (err) {
+            console.error('Delete saved tool item', err);
+            Alert.alert('Error', 'Unable to delete this saved tool item.');
+          }
+        },
+      },
+    ]);
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -42,12 +81,17 @@ export default function SavedToolsScreen({ onBack }) {
         ) : (
           savedItems.map((item) => (
             <View key={item.id} style={styles.card}>
-              <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>{item.title || item.type}</Text>
-                <Text style={styles.cardDate}>{new Date(item.created_at).toLocaleString()}</Text>
+              <View style={styles.cardHeaderRow}>
+                <View style={styles.cardHeaderText}>
+                  <Text style={styles.cardTitle}>{item.title || item.type}</Text>
+                  <Text style={styles.cardDate}>{new Date(item.created_at).toLocaleString()}</Text>
+                </View>
+                <TouchableOpacity onPress={() => handleDelete(item)} style={styles.deleteButton} activeOpacity={0.8}>
+                  <Ionicons name="trash-outline" size={18} color="#E15A5A" />
+                </TouchableOpacity>
               </View>
               <Text style={styles.cardMeta}>{item.prompt}</Text>
-              <Text style={styles.cardSummary}>{item.result}</Text>
+              <Text style={styles.cardSummary}>{stripMarkdown(item.result)}</Text>
             </View>
           ))
         )}
@@ -89,8 +133,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E9E8F5',
   },
-  cardHeader: {
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     marginBottom: 10,
+  },
+  cardHeaderText: {
+    flex: 1,
+    marginRight: 12,
   },
   cardTitle: {
     fontSize: 15,
@@ -111,6 +162,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#4F4A78',
     lineHeight: 20,
+  },
+  deleteButton: {
+    padding: 6,
+    borderRadius: 999,
+    backgroundColor: '#FFF4F4',
   },
   emptyState: {
     paddingTop: 80,

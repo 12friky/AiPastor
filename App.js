@@ -1,14 +1,24 @@
-import React, { useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, AppState, StyleSheet, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
+import { TokenProvider, useTokens } from './src/contexts/TokenContext';
 import Login from './screens/Login';
 import SignUp from './screens/SignUp';
 import HomeScreen from './screens/HomeScreen';
 
 function AppContent() {
   const { user, isLoading } = useAuth();
+  const { refreshTokenStatus } = useTokens();
   const [authScreen, setAuthScreen] = useState('login');
+
+  // Refresh token status whenever a user logs in
+  useEffect(() => {
+    if (user) {
+      refreshTokenStatus();
+    }
+  }, [user]);
 
   if (isLoading) {
     return (
@@ -30,10 +40,25 @@ function AppContent() {
 }
 
 export default function App() {
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'background' || nextAppState === 'inactive') {
+        AsyncStorage.removeItem('ai_chat_cache_v1');
+      }
+    });
+
+    return () => {
+      subscription.remove();
+      AsyncStorage.removeItem('cached_sermon');
+    };
+  }, []);
+
   return (
     <AuthProvider>
-      <AppContent />
-      <StatusBar style="auto" />
+      <TokenProvider>
+        <AppContent />
+        <StatusBar style="auto" />
+      </TokenProvider>
     </AuthProvider>
   );
 }

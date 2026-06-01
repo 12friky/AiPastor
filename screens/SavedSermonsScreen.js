@@ -6,21 +6,43 @@ import bibleDB from '../src/services/bibleDB';
 export default function SavedSermonsScreen({ onBack }) {
   const [savedSermons, setSavedSermons] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState(null);
+
+  const loadSavedSermons = async () => {
+    try {
+      setLoading(true);
+      const rows = await bibleDB.getSavedSermons();
+      setSavedSermons(rows);
+    } catch (err) {
+      console.error('Load saved sermons', err);
+      Alert.alert('Error', 'Unable to load saved sermons.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        const rows = await bibleDB.getSavedSermons();
-        setSavedSermons(rows);
-      } catch (err) {
-        console.error('Load saved sermons', err);
-        Alert.alert('Error', 'Unable to load saved sermons.');
-      } finally {
-        setLoading(false);
-      }
-    })();
+    loadSavedSermons();
   }, []);
+
+  const handleDelete = async (item) => {
+    Alert.alert('Delete this sermon?', 'This will remove it from your saved sermons.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await bibleDB.removeSavedSermon(item.id);
+            setSavedSermons((prev) => prev.filter((entry) => entry.id !== item.id));
+          } catch (err) {
+            console.error('Delete saved sermon', err);
+            Alert.alert('Error', 'Unable to delete this sermon.');
+          }
+        },
+      },
+    ]);
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -42,18 +64,55 @@ export default function SavedSermonsScreen({ onBack }) {
         ) : (
           savedSermons.map((item) => {
             let sections = [];
+            const cleanText = (value) => String(value || '')
+              .replace(/\r\n/g, '\n')
+              .replace(/[\t\u00a0]+/g, ' ')
+              .replace(/\s*\n\s*/g, '\n')
+              .replace(/\n{3,}/g, '\n\n')
+              .replace(/\s+/g, ' ')
+              .trim();
+            const cleanSection = (value) => cleanText(value).replace(/^\*+|\*+$/g, '').trim();
             try {
               sections = item.sections_json ? JSON.parse(item.sections_json) : [];
+              sections = Array.isArray(sections)
+                ? sections.map((entry) => ({
+                    section: cleanSection(entry?.section || 'SECTION'),
+                    text: cleanText(entry?.text || ''),
+                  }))
+                : [];
             } catch (error) {
               sections = [];
             }
+            const isExpanded = expandedId === item.id;
+            const previewText = sections.length > 0
+              ? sections.slice(0, 2).map((entry) => entry.text || '').join(' ')
+              : 'No sermon content available yet.';
             return (
               <View key={item.id} style={styles.card}>
-                <View style={styles.cardHeader}>
-                  <Text style={styles.cardTitle}>{item.topic || 'Untitled sermon'}</Text>
-                  <Text style={styles.cardDate}>{new Date(item.created_at).toLocaleString()}</Text>
+                <View style={styles.cardHeaderRow}>
+                  <View style={styles.cardHeaderText}>
+                    <Text style={styles.cardTitle}>{item.topic || 'Untitled sermon'}</Text>
+                    <Text style={styles.cardDate}>{new Date(item.created_at).toLocaleString()}</Text>
+                  </View>
+                  <View style={styles.cardActions}>
+                    <TouchableOpacity onPress={() => setExpandedId(isExpanded ? null : item.id)} style={styles.iconButton} activeOpacity={0.8}>
+                      <Ionicons name={isExpanded ? 'chevron-up-outline' : 'chevron-down-outline'} size={18} color="#534AB7" />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => handleDelete(item)} style={styles.deleteButton} activeOpacity={0.8}>
+                      <Ionicons name="trash-outline" size={18} color="#E15A5A" />
+                    </TouchableOpacity>
+                  </View>
                 </View>
                 <Text style={styles.cardSummary}>{sections.length} sections</Text>
+                {isExpanded ? (
+                  <View style={styles.expandedBody}>
+                    {sections.slice(0, 6).map((entry, index) => (
+                      <Text key={`${item.id}-${index}`} style={styles.previewText}>{entry.section ? `${entry.section}: ${entry.text}` : entry.text}</Text>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.previewText} numberOfLines={2}>{previewText}</Text>
+                )}
               </View>
             );
           })
@@ -96,8 +155,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E9E8F5',
   },
-  cardHeader: {
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     marginBottom: 8,
+  },
+  cardHeaderText: {
+    flex: 1,
+    marginRight: 12,
   },
   cardTitle: {
     fontSize: 15,
@@ -112,6 +178,30 @@ const styles = StyleSheet.create({
   cardSummary: {
     fontSize: 13,
     color: '#4F4A78',
+  },
+  previewText: {
+    fontSize: 12,
+    color: '#4F4A78',
+    lineHeight: 18,
+    marginTop: 6,
+  },
+  expandedBody: {
+    marginTop: 8,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  iconButton: {
+    padding: 6,
+    borderRadius: 999,
+    backgroundColor: '#EEF0FF',
+  },
+  deleteButton: {
+    padding: 6,
+    borderRadius: 999,
+    backgroundColor: '#FFF4F4',
   },
   emptyState: {
     paddingTop: 80,

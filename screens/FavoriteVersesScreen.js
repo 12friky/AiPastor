@@ -7,20 +7,41 @@ export default function FavoriteVersesScreen({ onBack }) {
   const [favoriteVerses, setFavoriteVerses] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const loadFavorites = async () => {
+    try {
+      setLoading(true);
+      const rows = await bibleDB.getSavedBibleVerses();
+      setFavoriteVerses(rows);
+    } catch (err) {
+      console.error('Load favorites', err);
+      Alert.alert('Error', 'Unable to load favorite verses.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        const rows = await bibleDB.getSavedBibleVerses();
-        setFavoriteVerses(rows);
-      } catch (err) {
-        console.error('Load favorites', err);
-        Alert.alert('Error', 'Unable to load favorite verses.');
-      } finally {
-        setLoading(false);
-      }
-    })();
+    loadFavorites();
   }, []);
+
+  const handleDelete = async (item) => {
+    Alert.alert('Delete this verse?', 'This will remove it from your favorites.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await bibleDB.removeFavoriteBibleVerse(item.bible_verse_id);
+            setFavoriteVerses((prev) => prev.filter((entry) => entry.id !== item.id));
+          } catch (err) {
+            console.error('Delete favorite verse', err);
+            Alert.alert('Error', 'Unable to delete this verse.');
+          }
+        },
+      },
+    ]);
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -42,9 +63,14 @@ export default function FavoriteVersesScreen({ onBack }) {
         ) : (
           favoriteVerses.map((item) => (
             <View key={item.id} style={styles.card}>
-              <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>{`${item.book_name} ${item.chapter}:${item.verse}`}</Text>
-                <Text style={styles.cardDate}>{new Date(item.created_at).toLocaleString()}</Text>
+              <View style={styles.cardHeaderRow}>
+                <View style={styles.cardHeaderText}>
+                  <Text style={styles.cardTitle}>{`${item.book_name} ${item.chapter}:${item.verse}`}</Text>
+                  <Text style={styles.cardDate}>{new Date(item.created_at).toLocaleString()}</Text>
+                </View>
+                <TouchableOpacity onPress={() => handleDelete(item)} style={styles.deleteButton} activeOpacity={0.8}>
+                  <Ionicons name="trash-outline" size={18} color="#E15A5A" />
+                </TouchableOpacity>
               </View>
               <Text style={styles.cardSummary}>{item.text}</Text>
             </View>
@@ -88,8 +114,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E9E8F5',
   },
-  cardHeader: {
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     marginBottom: 8,
+  },
+  cardHeaderText: {
+    flex: 1,
+    marginRight: 12,
   },
   cardTitle: {
     fontSize: 15,
@@ -104,6 +137,11 @@ const styles = StyleSheet.create({
   cardSummary: {
     fontSize: 13,
     color: '#4F4A78',
+  },
+  deleteButton: {
+    padding: 6,
+    borderRadius: 999,
+    backgroundColor: '#FFF4F4',
   },
   emptyState: {
     paddingTop: 80,

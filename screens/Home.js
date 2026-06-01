@@ -3,38 +3,124 @@ import { ActivityIndicator, ScrollView, View, Text, TouchableOpacity, StyleSheet
 import { Ionicons } from '@expo/vector-icons';
 import bibleDB from '../src/services/bibleDB';
 
-export default function Home({ onOpenTools }) {
+// ─── Friendly error messages ──────────────────────────────────────────────────
+function getFriendlyError(err) {
+  const msg = (err?.message || '').toLowerCase();
+  if (
+    msg.includes('network request failed') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('timeout') ||
+    msg.includes('econnrefused') ||
+    msg.includes('no internet')
+  ) {
+    return {
+      icon: '📶',
+      title: 'No internet connection',
+      body: 'It looks like you are offline. Please check your Wi-Fi or mobile data and try again.',
+    };
+  }
+  if (
+    msg.includes('gemini') ||
+    msg.includes('api key') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit') ||
+    msg.includes('503') ||
+    msg.includes('500')
+  ) {
+    return {
+      icon: '🤖',
+      title: 'AI is taking a break',
+      body: 'Our AI assistant is temporarily unavailable. Please wait a moment and try again.',
+    };
+  }
+  return {
+    icon: '⚠️',
+    title: 'Something went wrong',
+    body: 'We could not load this right now. Please try again.',
+  };
+}
+
+// ─── Inline error banner used inside cards ────────────────────────────────────
+function ErrorBanner({ err, onRetry }) {
+  const info = getFriendlyError(err);
+  return (
+    <View style={errorStyles.banner}>
+      <Text style={errorStyles.bannerIcon}>{info.icon}</Text>
+      <View style={errorStyles.bannerText}>
+        <Text style={errorStyles.bannerTitle}>{info.title}</Text>
+        <Text style={errorStyles.bannerBody}>{info.body}</Text>
+      </View>
+      {onRetry && (
+        <TouchableOpacity style={errorStyles.retryBtn} onPress={onRetry} activeOpacity={0.8}>
+          <Text style={errorStyles.retryText}>Retry</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
+const errorStyles = StyleSheet.create({
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFF4F4',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FECDCD',
+    padding: 12,
+    gap: 10,
+  },
+  bannerIcon: { fontSize: 22, marginTop: 2 },
+  bannerText: { flex: 1 },
+  bannerTitle: { fontSize: 13, fontWeight: '700', color: '#B91C1C', marginBottom: 3 },
+  bannerBody: { fontSize: 12, color: '#7F1D1D', lineHeight: 17 },
+  retryBtn: {
+    backgroundColor: '#B91C1C',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    alignSelf: 'flex-start',
+    marginTop: 2,
+  },
+  retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+});
+
+
+export default function Home({ onOpenTools, onUpgradePress }) {
   const [verseOfTheDay, setVerseOfTheDay] = useState(null);
   const [verseLoading, setVerseLoading] = useState(true);
   const [verseError, setVerseError] = useState(null);
 
+  const loadVerseOfTheDay = async () => {
+    try {
+      setVerseLoading(true);
+      setVerseError(null);
+      const verse = await bibleDB.getVerseOfTheDay();
+      setVerseOfTheDay(verse);
+    } catch (error) {
+      setVerseError(error);
+    } finally {
+      setVerseLoading(false);
+    }
+  };
+
   useEffect(() => {
     let isMounted = true;
-
-    const loadVerseOfTheDay = async () => {
+    const run = async () => {
       try {
         setVerseLoading(true);
         setVerseError(null);
         const verse = await bibleDB.getVerseOfTheDay();
-        if (isMounted) {
-          setVerseOfTheDay(verse);
-        }
+        if (isMounted) setVerseOfTheDay(verse);
       } catch (error) {
-        if (isMounted) {
-          setVerseError('Unable to load verse of the day');
-        }
+        if (isMounted) setVerseError(error);
       } finally {
-        if (isMounted) {
-          setVerseLoading(false);
-        }
+        if (isMounted) setVerseLoading(false);
       }
     };
-
-    loadVerseOfTheDay();
-
-    return () => {
-      isMounted = false;
-    };
+    run();
+    return () => { isMounted = false; };
   }, []);
 
   const onToolPress = (tool) => {
@@ -54,7 +140,7 @@ export default function Home({ onOpenTools }) {
             <Text style={styles.verseLoadingText}>Loading verse...</Text>
           </View>
         ) : verseError ? (
-          <Text style={styles.cardTitle}>{verseError}</Text>
+          <ErrorBanner err={verseError} onRetry={loadVerseOfTheDay} />
         ) : verseOfTheDay ? (
           <>
             <Text style={styles.cardTitle}>"{verseOfTheDay.text}"</Text>

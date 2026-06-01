@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert, SafeAreaView, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/contexts/AuthContext';
+import { useTokens } from '../src/contexts/TokenContext';
 import Home from './Home';
 import Sermon from './Sermon';
 import Bible from './Bible';
@@ -11,6 +12,8 @@ import SavedSermonsScreen from './SavedSermonsScreen';
 import SavedAiScreen from './SavedAiScreen';
 import SavedToolsScreen from './SavedToolsScreen';
 import FavoriteVersesScreen from './FavoriteVersesScreen';
+import UpgradeScreen from './UpgradeScreen';
+import TokenStatus from '../src/components/TokenStatus';
 
 const ScreenPlaceholder = ({ label }) => (
   <View style={styles.placeholderContainer}>
@@ -23,8 +26,19 @@ export default function HomeScreen() {
   const [activeToolPage, setActiveToolPage] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [pendingVersePrompt, setPendingVersePrompt] = useState(null);
+  // Upgrade screen state: { message, requiresUpgrade }
+  const [upgradeParams, setUpgradeParams] = useState(null);
   const { logout, user } = useAuth();
-  const showDrawerMenu = activeTab === 'home';
+  const { isExpired, refreshTokenStatus } = useTokens();
+  const showDrawerMenu = activeTab === 'home' && !upgradeParams;
+
+  const navigateToUpgrade = (message, requiresUpgrade = false) => {
+    setUpgradeParams({ message, requiresUpgrade });
+  };
+
+  const handleUpgradeBack = () => {
+    setUpgradeParams(null);
+  };
 
   useEffect(() => {
     if (!showDrawerMenu) {
@@ -75,19 +89,76 @@ export default function HomeScreen() {
   };
 
   const renderScreen = () => {
+    // ── Upgrade screen takes over everything ──────────────────────────────
+    if (upgradeParams) {
+      return (
+        <UpgradeScreen
+          message={upgradeParams.message}
+          requiresUpgrade={upgradeParams.requiresUpgrade}
+          onBack={upgradeParams.requiresUpgrade ? undefined : handleUpgradeBack}
+        />
+      );
+    }
+
     if (activeToolPage) {
-      return <ToolHub selectedTool={activeToolPage} onBack={() => setActiveToolPage(null)} />;
+      return (
+        <ToolHub
+          selectedTool={activeToolPage}
+          onBack={() => setActiveToolPage(null)}
+          onTokensExpired={() =>
+            navigateToUpgrade(
+              'Your free tokens are finished. Upgrade to Premium to continue using AiPastor.',
+              true
+            )
+          }
+        />
+      );
     }
 
     switch (activeTab) {
       case 'home':
-        return <Home onOpenTools={(tool) => setActiveToolPage(tool)} />;
+        return (
+          <Home
+            onOpenTools={(tool) => setActiveToolPage(tool)}
+            onUpgradePress={() => navigateToUpgrade('Unlock unlimited access with Premium.')}
+          />
+        );
       case 'sermon':
-        return <Sermon />;
+        return (
+          <Sermon
+            onTokensExpired={() =>
+              navigateToUpgrade(
+                'Your free tokens are finished. Upgrade to Premium to continue using AiPastor.',
+                true
+              )
+            }
+          />
+        );
       case 'bible':
-        return <Bible onExplainVerse={handleExplainVerse} />;
+        return (
+          <Bible
+            onExplainVerse={handleExplainVerse}
+            onTokensExpired={() =>
+              navigateToUpgrade(
+                'Your free tokens are finished. Upgrade to Premium to continue using AiPastor.',
+                true
+              )
+            }
+          />
+        );
       case 'aichat':
-        return <AiChat initialPrompt={pendingVersePrompt} onPromptHandled={handlePromptHandled} />;
+        return (
+          <AiChat
+            initialPrompt={pendingVersePrompt}
+            onPromptHandled={handlePromptHandled}
+            onTokensExpired={() =>
+              navigateToUpgrade(
+                'Your free tokens are finished. Upgrade to Premium to continue using AiPastor.',
+                true
+              )
+            }
+          />
+        );
       case 'favorites':
         return <FavoriteVersesScreen onBack={() => setActiveTab('home')} />;
       case 'savedTools':
@@ -105,7 +176,12 @@ export default function HomeScreen() {
       case 'bulletinWriter':
         return <ScreenPlaceholder label="Bulletin Writer" />;
       default:
-        return <Home onOpenTools={(tool) => setActiveToolPage(tool)} />;
+        return (
+          <Home
+            onOpenTools={(tool) => setActiveToolPage(tool)}
+            onUpgradePress={() => navigateToUpgrade('Unlock unlimited access with Premium.')}
+          />
+        );
     }
   };
 
@@ -138,6 +214,14 @@ export default function HomeScreen() {
               <Text style={styles.headerTitle}>{user?.fullName || 'Pastor'}</Text>
             </View>
           </View>
+
+          {/* Token status — sits between name and logout, shrinks gracefully */}
+          <View style={styles.headerTokenWrap}>
+            <TokenStatus
+              onUpgradePress={() => navigateToUpgrade('Unlock unlimited access with Premium.')}
+            />
+          </View>
+
           <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
             <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
           </TouchableOpacity>
@@ -175,7 +259,7 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {!activeToolPage && (
+      {!activeToolPage && !upgradeParams && (
         <View style={styles.tabBar}>
         <TabButton 
           name="home"
@@ -230,7 +314,13 @@ const styles = StyleSheet.create({
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 0,
+    marginRight: 8,
+  },
+  headerTokenWrap: {
     flex: 1,
+    alignItems: 'flex-end',
+    marginRight: 8,
   },
   headerSubtitle: {
     fontSize: 12,

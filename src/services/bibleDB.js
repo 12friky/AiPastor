@@ -228,6 +228,11 @@ const bibleDB = {
     );
   },
 
+  removeSavedToolItem: async (id) => {
+    await ensureDatabase();
+    return runSync('DELETE FROM saved_tool_items WHERE id = ?', [id]);
+  },
+
   getSavedToolItems: async (type) => {
     await ensureDatabase();
     if (type) {
@@ -244,6 +249,11 @@ const bibleDB = {
     );
   },
 
+  removeSavedSermon: async (id) => {
+    await ensureDatabase();
+    return runSync('DELETE FROM saved_sermons WHERE id = ?', [id]);
+  },
+
   getSavedSermons: async () => {
     await ensureDatabase();
     return selectAllSync('SELECT * FROM saved_sermons ORDER BY id DESC');
@@ -255,6 +265,11 @@ const bibleDB = {
       'INSERT INTO saved_ai_responses (prompt, response, created_at) VALUES (?, ?, ?)',
       [prompt, response, new Date().toISOString()]
     );
+  },
+
+  removeSavedAiResponse: async (id) => {
+    await ensureDatabase();
+    return runSync('DELETE FROM saved_ai_responses WHERE id = ?', [id]);
   },
 
   getSavedAiResponses: async () => {

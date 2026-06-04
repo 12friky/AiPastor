@@ -9,19 +9,23 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
+import { useAuth } from '../src/contexts/AuthContext';
 
 export default function SignUp({ onSwitch }) {
+  const { signup } = useAuth();
   const [step, setStep] = useState(1);
+  const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     fullName: '',
-    emailAddress: '',
+    email: '',           // matches backend field
     password: '',
     phoneNumber: '',
     churchName: '',
     denomination: '',
-    yourRole: 'Senior Pastor',
-    preferredTranslation: 'NIV — New International Version',
+    role: 'Senior Pastor',              // matches backend field
+    bibleTranslation: 'NIV — New International Version', // matches backend field
   });
 
   const denominations = [
@@ -44,23 +48,59 @@ export default function SignUp({ onSwitch }) {
   ];
 
   const handleStep1Submit = () => {
-    if (!formData.fullName || !formData.emailAddress || !formData.password || !formData.phoneNumber) {
-      Alert.alert('Validation', 'Please fill all fields');
+    if (!formData.fullName.trim()) {
+      Alert.alert('Validation', 'Please enter your full name.');
+      return;
+    }
+    if (!formData.email.trim()) {
+      Alert.alert('Validation', 'Please enter your email address.');
+      return;
+    }
+    if (!formData.password || formData.password.length < 6) {
+      Alert.alert('Validation', 'Password must be at least 6 characters.');
+      return;
+    }
+    if (!formData.phoneNumber.trim()) {
+      Alert.alert('Validation', 'Please enter your phone number.');
       return;
     }
     setStep(2);
   };
 
-  const handleStep2Submit = () => {
-    if (!formData.churchName) {
-      Alert.alert('Validation', 'Please enter your church name');
+  const handleStep2Submit = async () => {
+    if (!formData.churchName.trim()) {
+      Alert.alert('Validation', 'Please enter your church name.');
       return;
     }
-    // Placeholder: no backend yet
-    Alert.alert(
-      'Account Created',
-      `Welcome ${formData.fullName}!\n\nChurch: ${formData.churchName}\nRole: ${formData.yourRole}\nTranslation: ${formData.preferredTranslation}`
-    );
+    if (!formData.denomination) {
+      Alert.alert('Validation', 'Please select your denomination.');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await signup({
+        fullName: formData.fullName.trim(),
+        email: formData.email.trim().toLowerCase(),
+        password: formData.password,
+        phoneNumber: formData.phoneNumber.trim(),
+        churchName: formData.churchName.trim(),
+        denomination: formData.denomination,
+        role: formData.role,
+        bibleTranslation: formData.bibleTranslation,
+      });
+
+      Alert.alert(
+        'Account Created ✅',
+        `Welcome, ${formData.fullName}! Your account is ready. Please log in.`,
+        [{ text: 'Log In', onPress: () => onSwitch && onSwitch('login') }]
+      );
+    } catch (error) {
+      // Show the backend's message directly — it's already user-friendly
+      Alert.alert('Sign Up Failed', error.message || 'Something went wrong. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const updateField = (field, value) => {
@@ -88,8 +128,8 @@ export default function SignUp({ onSwitch }) {
         <TextInput
           style={styles.input}
           placeholder="samuel@grace.church"
-          value={formData.emailAddress}
-          onChangeText={(text) => updateField('emailAddress', text)}
+          value={formData.email}
+          onChangeText={(text) => updateField('email', text)}
           keyboardType="email-address"
           autoCapitalize="none"
           placeholderTextColor="#999"
@@ -181,22 +221,17 @@ export default function SignUp({ onSwitch }) {
 
         <Text style={styles.label}>YOUR ROLE</Text>
         <View style={styles.roleContainer}>
-          <TouchableOpacity
-            style={[
-              styles.roleButton,
-              formData.yourRole === 'Senior Pastor' && styles.roleButtonActive,
-            ]}
-            onPress={() => updateField('yourRole', 'Senior Pastor')}
-          >
-            <Text
-              style={[
-                styles.roleText,
-                formData.yourRole === 'Senior Pastor' && styles.roleTextActive,
-              ]}
+          {['Senior Pastor', 'Associate Pastor', 'Youth Pastor', 'Evangelist', 'Deacon', 'Other'].map((r) => (
+            <TouchableOpacity
+              key={r}
+              style={[styles.roleButton, formData.role === r && styles.roleButtonActive]}
+              onPress={() => updateField('role', r)}
             >
-              Senior Pastor
-            </Text>
-          </TouchableOpacity>
+              <Text style={[styles.roleText, formData.role === r && styles.roleTextActive]}>
+                {r}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
 
         <Text style={styles.label}>PREFERRED BIBLE TRANSLATION</Text>
@@ -206,14 +241,14 @@ export default function SignUp({ onSwitch }) {
               key={translation}
               style={[
                 styles.translationButton,
-                formData.preferredTranslation === translation && styles.translationButtonActive,
+                formData.bibleTranslation === translation && styles.translationButtonActive,
               ]}
-              onPress={() => updateField('preferredTranslation', translation)}
+              onPress={() => updateField('bibleTranslation', translation)}
             >
               <Text
                 style={[
                   styles.translationText,
-                  formData.preferredTranslation === translation && styles.translationTextActive,
+                  formData.bibleTranslation === translation && styles.translationTextActive,
                 ]}
               >
                 {translation}
@@ -222,8 +257,16 @@ export default function SignUp({ onSwitch }) {
           ))}
         </View>
 
-        <TouchableOpacity style={styles.setupButton} onPress={handleStep2Submit}>
-          <Text style={styles.setupButtonText}>Set up my account</Text>
+        <TouchableOpacity
+          style={[styles.setupButton, isLoading && { opacity: 0.6 }]}
+          onPress={handleStep2Submit}
+          disabled={isLoading}
+        >
+          {isLoading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.setupButtonText}>Set up my account</Text>
+          )}
         </TouchableOpacity>
 
         <Text style={styles.footerNote}>You can change these later in Settings</Text>
@@ -377,6 +420,8 @@ const styles = StyleSheet.create({
   },
   roleContainer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
     marginTop: 4,
   },
   roleButton: {

@@ -23,18 +23,27 @@ function getFriendlyError(err) {
       body: "It looks like you're offline. Please check your Wi-Fi or mobile data and try again.",
     };
   }
+  if (msg.includes('not authorized') || msg.includes('401') || msg.includes('invalid token')) {
+    return {
+      icon: '🔑',
+      title: 'Session expired',
+      body: 'Please log out and log back in, then try again.',
+    };
+  }
   if (
     msg.includes('gemini') ||
     msg.includes('api key') ||
     msg.includes('quota') ||
     msg.includes('rate limit') ||
     msg.includes('503') ||
-    msg.includes('500')
+    msg.includes('500') ||
+    msg.includes('busy') ||
+    msg.includes('overloaded')
   ) {
     return {
       icon: '🤖',
       title: 'AI is taking a break',
-      body: 'Our AI assistant is temporarily unavailable. Please wait a moment and try again.',
+      body: 'The AI assistant is busy right now. Please wait a moment and try again.',
     };
   }
   return {
@@ -131,12 +140,11 @@ export default function Sermon({ onTokensExpired }) {
   const normalizeSermonText = (value) => {
     if (typeof value === 'string') {
       return value
-        .replace(/\r\n/g, '\n')
-        .replace(/[\t\u00a0]+/g, ' ')
-        .replace(/\s*\n\s*/g, '\n')
-        .replace(/\n{3,}/g, '\n\n')
-        .replace(/\s+/g, ' ')
+        .replace(/\r\n/g, '\n')      // normalise line endings
+        .replace(/[\t\u00a0]+/g, ' ') // tabs/nbsp → space
+        .replace(/\n{3,}/g, '\n\n')   // max 2 consecutive newlines
         .trim();
+      // NOTE: do NOT collapse \s+ to ' ' — that destroys paragraph breaks
     }
 
     if (Array.isArray(value)) {
@@ -151,7 +159,6 @@ export default function Sermon({ onTokensExpired }) {
       for (const [key, entryValue] of Object.entries(value)) {
         const normalized = normalizeSermonText(entryValue);
         if (!normalized) continue;
-
         if (typeof entryValue === 'string' || typeof entryValue === 'number' || typeof entryValue === 'boolean') {
           lines.push(normalized);
         } else {
@@ -161,13 +168,7 @@ export default function Sermon({ onTokensExpired }) {
       return lines.join('\n');
     }
 
-    return String(value ?? '')
-      .replace(/\r\n/g, '\n')
-      .replace(/[\t\u00a0]+/g, ' ')
-      .replace(/\s*\n\s*/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return String(value ?? '').replace(/\r\n/g, '\n').trim();
   };
 
   const normalizeSectionTitle = (value) => normalizeSermonText(value)
@@ -302,9 +303,13 @@ STRICT RULES:
 `;
 
     try {
+      const storedToken = await AsyncStorage.getItem('token');
       const response = await fetch(`${API_BASE_URL}/api/gemin/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(storedToken ? { Authorization: `Bearer ${storedToken}` } : {}),
+        },
         body: JSON.stringify({ message: prompt, feature: 'GENERATE_SERMON' }),
       });
 

@@ -889,7 +889,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     paddingHorizontal: 16,
-    paddingBottom: 20,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
     paddingTop: 10,
     borderTopWidth: 0.5,
     borderTopColor: '#E4E3EF',

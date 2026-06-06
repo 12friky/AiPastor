@@ -66,7 +66,7 @@ const styles = StyleSheet.create({
     marginBottom: 3,
   },
   track: {
-    width: 80,
+    width: 60,        // reduced from 80 — fits small phones without crowding
     height: 4,
     backgroundColor: '#E4E3EF',
     borderRadius: 2,

@@ -218,13 +218,18 @@ function parseSermonSections(raw) {
 }
 
 function SectionCard({ item, index }) {
-  const [expanded, setExpanded] = useState(false);
+  // First two sections (title + theme) start expanded; rest start expanded too
+  // so the user sees all content immediately without having to tap
+  const [expanded, setExpanded] = useState(true);
   const meta = getSectionMeta(item.section || '');
   const hasTags = item.tags && item.tags.trim() !== '';
   const isClimax = (item.section || '').toLowerCase().includes('climax');
 
+  // Split text on newlines so \n renders as actual line breaks
+  const textLines = (item.text || '').split('\n');
+
   return (
-    <View style={[styles.card, { borderColor: meta.border }]}>
+    <View style={[styles.card, { borderColor: meta.border, borderRadius: 14, marginBottom: 8 }]}>
       <TouchableOpacity
         style={styles.cardHeader}
         onPress={() => setExpanded(!expanded)}
@@ -256,9 +261,21 @@ function SectionCard({ item, index }) {
           {isClimax && (
             <Text style={styles.climaxLabel}>— The Explosion Moment —</Text>
           )}
-          <Text style={[styles.cardText, isClimax && styles.climaxText]}>
-            {item.text}
-          </Text>
+          {/* Render each line separately so \n shows as a real line break */}
+          <View>
+            {textLines.map((line, i) => (
+              line.trim() === '' ? (
+                <View key={i} style={{ height: 8 }} />
+              ) : (
+                <Text
+                  key={i}
+                  style={[styles.cardText, isClimax && styles.climaxText]}
+                >
+                  {line}
+                </Text>
+              )
+            ))}
+          </View>
           {hasTags && (
             <View style={[styles.verseBox, { borderColor: meta.border }]}>
               <Text style={[styles.verseLabel, { color: meta.color }]}>Scripture</Text>
